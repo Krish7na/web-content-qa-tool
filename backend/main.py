@@ -7,26 +7,29 @@ import faiss
 import numpy as np
 import os
 import json
-import ollama  # Uses Ollama API instead of local Llama.cpp
+import ollama  # Uses Ollama API
 
 app = FastAPI()
 
-# Load Sentence Transformer Model (Uses Hugging Face Model)
+# Load Sentence Transformer Model
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 # FAISS index storage path
 FAISS_INDEX_PATH = "faiss_index.bin"
 TEXT_STORAGE_PATH = "stored_texts.json"
 
-# Load FAISS Index if available
-index = None
+# Initialize FAISS index & stored texts
+index = faiss.IndexFlatL2(384)  # Model output size is 384
 stored_texts = []
 
-if os.path.exists(FAISS_INDEX_PATH) and os.path.exists(TEXT_STORAGE_PATH):
+if os.path.exists(TEXT_STORAGE_PATH):
     with open(TEXT_STORAGE_PATH, "r") as f:
         stored_texts = json.load(f)
 
+if os.path.exists(FAISS_INDEX_PATH) and len(stored_texts) > 0:
     index = faiss.read_index(FAISS_INDEX_PATH)
+else:
+    index = faiss.IndexFlatL2(384)  # Ensure it's initialized
 
 class URLInput(BaseModel):
     urls: list[str]
@@ -40,20 +43,18 @@ def extract_text_from_url(url):
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        return ' '.join([p.get_text() for p in soup.find_all('p')])
+        text = ' '.join([p.get_text() for p in soup.find_all('p')])
+        return text if text.strip() else "No readable text found."
     except requests.exceptions.RequestException:
-        return ""
+        return "Error fetching content."
 
 @app.post("/ingest/")
 async def ingest_content(input_data: URLInput):
     """Ingest web content and store embeddings"""
     global index, stored_texts
 
-    all_texts = []
-    for url in input_data.urls:
-        text = extract_text_from_url(url)
-        if text:
-            all_texts.append(text)
+    all_texts = [extract_text_from_url(url) for url in input_data.urls]
+    all_texts = [text for text in all_texts if text and text != "No readable text found." and text != "Error fetching content."]
 
     if not all_texts:
         raise HTTPException(status_code=400, detail="No valid content found.")
@@ -61,9 +62,7 @@ async def ingest_content(input_data: URLInput):
     stored_texts.extend(all_texts)
     embeddings = embedding_model.encode(all_texts, convert_to_numpy=True)
 
-    # Create or update FAISS index
-    if index is None:
-        index = faiss.IndexFlatL2(embeddings.shape[1])
+    # Update FAISS index
     index.add(embeddings)
 
     # Save FAISS index and texts
@@ -78,12 +77,15 @@ async def ask_question(input_data: QuestionInput):
     """Retrieve an answer using Ollama (Mistral-7B)"""
     global index, stored_texts
 
-    if index is None or len(stored_texts) == 0:
+    if len(stored_texts) == 0:
         raise HTTPException(status_code=400, detail="No content ingested yet.")
 
     # Find the most relevant content
     question_embedding = embedding_model.encode([input_data.question])[0].reshape(1, -1)
     _, nearest_idx = index.search(question_embedding, k=1)
+
+    if nearest_idx[0][0] == -1:
+        raise HTTPException(status_code=404, detail="No relevant content found.")
 
     best_match = stored_texts[nearest_idx[0][0]]
 
@@ -92,7 +94,8 @@ async def ask_question(input_data: QuestionInput):
     
     response = ollama.chat(model="mistral", messages=[{"role": "user", "content": prompt}])
 
-    return {"answer": response["message"]}
+    return {"answer": response["message"]["content"]}  # Fixed response parsing
+
 
 
 
