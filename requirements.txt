@@ -7,4 +7,5 @@ numpy
 faiss-cpu
 llama-cpp-python
 streamlit
-requests
+beautifulsoup4
+ollama
