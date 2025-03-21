@@ -24,7 +24,7 @@ model = AutoModelForCausalLM.from_pretrained(
     "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
     model_file="mistral-7b-instruct-v0.2.Q4_K_M.gguf",
     model_type="mistral",
-    gpu_layers=30  # Adjust based on available VRAM
+    gpu_layers=0  # Adjust based on available VRAM
 )
 
 # FAISS index storage path
