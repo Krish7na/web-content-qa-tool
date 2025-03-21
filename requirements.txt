@@ -9,3 +9,6 @@ llama-cpp-python
 streamlit
 beautifulsoup4
 ollama
+transformers 
+torch 
+accelerate
