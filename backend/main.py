@@ -92,9 +92,18 @@ async def ask_question(input_data: QuestionInput):
     # Use Ollama (Mistral) to generate answer
     prompt = f"Based on the following webpage content, answer the question:\n\nContent:\n{best_match[:1000]}\n\nQuestion: {input_data.question}"
     
-    response = ollama.chat(model="mistral", messages=[{"role": "user", "content": prompt}])
+    try:
+        response = ollama.chat(model="mistral", messages=[{"role": "user", "content": prompt}])
+        
+        # Check if response contains the expected key
+        if "message" not in response:
+            raise ValueError("Unexpected response format from Ollama")
+        
+        return {"answer": response["message"]["content"]}
 
-    return {"answer": response["message"]["content"]}  # Fixed response parsing
+    except Exception as e:
+        print(f"Error in /ask/ endpoint: {e}")  # Log error
+        raise HTTPException(status_code=500, detail="Failed to generate answer.")
 
 
 
