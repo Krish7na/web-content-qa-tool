@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 
-API_URL = "https://web-cont-qa-tool.onrender.com"
+API_URL = "https://web-content-qa-tool-mcls.onrender.com"
 
 st.title("Web Content Q&A Tool (Mistral-7B)")
 
