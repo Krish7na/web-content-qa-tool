@@ -16,7 +16,7 @@ app = FastAPI()
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 # Load Mistral Model & Tokenizer from Hugging Face
-model_name = "mistralai/Mistral-7B-Instruct-v0.1"  # You can change this to another instruct model if needed
+model_name = "TheBloke/Mistral-7B-Instruct-v0.2-GGUF"  # You can change this to another instruct model if needed
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
 
