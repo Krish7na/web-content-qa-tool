@@ -5,47 +5,23 @@ from bs4 import BeautifulSoup
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-import os
-import json
-import torch
-from ctransformers import AutoModelForCausalLM  # Using ctransformers for GGUF models
 
 app = FastAPI()
 
-# Load Sentence Transformer Model for embeddings
+# Use a pre-hosted Mistral-7B model API
+MISTRAL_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+HF_TOKEN = "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"
+
+# Load Sentence Embedding Model
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-# Use a valid directory for model storage (Render allows /data or /tmp)
-MODEL_DIR = "/data/mistral" if os.path.exists("/data") else "/tmp/mistral"
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-# Load Mistral GGUF Model using ctransformers
-model = AutoModelForCausalLM.from_pretrained(
-    "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
-    model_file="mistral-7b-instruct-v0.2.Q4_K_M.gguf",
-    model_type="mistral",
-    gpu_layers=0  # Adjust based on available VRAM
-)
-
-# FAISS index storage path
-FAISS_INDEX_PATH = os.path.join(MODEL_DIR, "faiss_index.bin")
-TEXT_STORAGE_PATH = os.path.join(MODEL_DIR, "stored_texts.json")
-
-# Initialize FAISS index & stored texts
-index = faiss.IndexFlatL2(384)  # Model output size is 384
+# In-memory storage
+scraped_data = {}
+index = None
 stored_texts = []
 
-if os.path.exists(TEXT_STORAGE_PATH):
-    with open(TEXT_STORAGE_PATH, "r") as f:
-        stored_texts = json.load(f)
-
-if os.path.exists(FAISS_INDEX_PATH) and len(stored_texts) > 0:
-    index = faiss.read_index(FAISS_INDEX_PATH)
-else:
-    index = faiss.IndexFlatL2(384)  # Ensure it's initialized
-
 class URLInput(BaseModel):
-    urls: list[str]
+    urls: list[str]  
 
 class QuestionInput(BaseModel):
     question: str
@@ -56,58 +32,66 @@ def extract_text_from_url(url):
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        text = ' '.join([p.get_text() for p in soup.find_all('p')])
-        return text if text.strip() else "No readable text found."
-    except requests.exceptions.RequestException:
-        return "Error fetching content."
+        return ' '.join([p.get_text() for p in soup.find_all('p')])
+    except requests.exceptions.RequestException as e:
+        return ""
 
 @app.post("/ingest/")
 async def ingest_content(input_data: URLInput):
     """Ingest web content and store embeddings"""
     global index, stored_texts
-
-    all_texts = [extract_text_from_url(url) for url in input_data.urls]
-    all_texts = [text for text in all_texts if text and text != "No readable text found." and text != "Error fetching content."]
+    all_texts = []
+    
+    for url in input_data.urls:
+        text = extract_text_from_url(url)
+        if text:
+            scraped_data[url] = text
+            all_texts.append(text)
 
     if not all_texts:
         raise HTTPException(status_code=400, detail="No valid content found.")
 
-    stored_texts.extend(all_texts)
+    stored_texts = all_texts
     embeddings = embedding_model.encode(all_texts, convert_to_numpy=True)
 
-    # Update FAISS index
-    index.add(embeddings)
+    # Create FAISS index if not exists
+    if index is None:
+        index = faiss.IndexFlatL2(embeddings.shape[1])
+    else:
+        index.reset()  
 
-    # Save FAISS index and texts
-    faiss.write_index(index, FAISS_INDEX_PATH)
-    with open(TEXT_STORAGE_PATH, "w") as f:
-        json.dump(stored_texts, f)
+    index.add(embeddings)
 
     return {"message": "Content ingested successfully."}
 
 @app.post("/ask/")
 async def ask_question(input_data: QuestionInput):
-    """Retrieve an answer using Mistral-7B via ctransformers"""
+    """Retrieve an answer using hosted Mistral-7B API"""
     global index, stored_texts
-
-    if len(stored_texts) == 0:
+    if index is None or len(stored_texts) == 0:
         raise HTTPException(status_code=400, detail="No content ingested yet.")
 
     # Find the most relevant content
     question_embedding = embedding_model.encode([input_data.question])[0].reshape(1, -1)
     _, nearest_idx = index.search(question_embedding, k=1)
 
-    if nearest_idx[0][0] == -1:
-        raise HTTPException(status_code=404, detail="No relevant content found.")
-
     best_match = stored_texts[nearest_idx[0][0]]
 
-    # Generate a response using Mistral-7B via ctransformers
+    # Prepare Mistral API request
     prompt = f"Based on the following webpage content, answer the question:\n\nContent:\n{best_match[:1000]}\n\nQuestion: {input_data.question}"
-    
-    response = model(prompt)
 
-    return {"answer": response}
+    response = requests.post(
+        MISTRAL_API_URL,
+        headers={"Authorization": f"Bearer {HF_TOKEN}"},
+        json={"inputs": prompt, "parameters": {"max_new_tokens": 512, "temperature": 0.7}}
+    )
+
+    if response.status_code == 200:
+        answer = response.json()[0]["generated_text"]
+        return {"answer": answer}
+    else:
+        return {"error": f"LLM API Error: {response.text}"}
+
 
 
 
