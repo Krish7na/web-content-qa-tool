@@ -7,12 +7,18 @@ import faiss
 import numpy as np
 import os
 import json
-import ollama  # Uses Ollama API
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
 
 app = FastAPI()
 
-# Load Sentence Transformer Model
+# Load Sentence Transformer Model for embeddings
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+# Load Mistral Model & Tokenizer from Hugging Face
+model_name = "mistralai/Mistral-7B-Instruct-v0.1"  # You can change this to another instruct model if needed
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
 
 # FAISS index storage path
 FAISS_INDEX_PATH = "faiss_index.bin"
@@ -74,7 +80,7 @@ async def ingest_content(input_data: URLInput):
 
 @app.post("/ask/")
 async def ask_question(input_data: QuestionInput):
-    """Retrieve an answer using Ollama (Mistral-7B)"""
+    """Retrieve an answer using Hugging Face Mistral-7B"""
     global index, stored_texts
 
     if len(stored_texts) == 0:
@@ -89,21 +95,15 @@ async def ask_question(input_data: QuestionInput):
 
     best_match = stored_texts[nearest_idx[0][0]]
 
-    # Use Ollama (Mistral) to generate answer
+    # Generate a response using the Mistral model
     prompt = f"Based on the following webpage content, answer the question:\n\nContent:\n{best_match[:1000]}\n\nQuestion: {input_data.question}"
     
-    try:
-        response = ollama.chat(model="mistral", messages=[{"role": "user", "content": prompt}])
-        
-        # Check if response contains the expected key
-        if "message" not in response:
-            raise ValueError("Unexpected response format from Ollama")
-        
-        return {"answer": response["message"]["content"]}
+    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+    output = model.generate(**inputs, max_length=512)
+    response = tokenizer.decode(output[0], skip_special_tokens=True)
 
-    except Exception as e:
-        print(f"Error in /ask/ endpoint: {e}")  # Log error
-        raise HTTPException(status_code=500, detail="Failed to generate answer.")
+    return {"answer": response}
+
 
 
 
