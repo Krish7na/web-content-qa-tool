@@ -12,3 +12,4 @@ ollama
 transformers 
 torch 
 accelerate
+ctransformers
