@@ -7,22 +7,29 @@ import faiss
 import numpy as np
 import os
 import json
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+from ctransformers import AutoModelForCausalLM  # Using ctransformers for GGUF models
 
 app = FastAPI()
 
 # Load Sentence Transformer Model for embeddings
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-# Load Mistral Model & Tokenizer from Hugging Face
-model_name = "TheBloke/Mistral-7B-Instruct-v0.2-GGUF"  # You can change this to another instruct model if needed
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
+# Use a valid directory for model storage (Render allows /data or /tmp)
+MODEL_DIR = "/data/mistral" if os.path.exists("/data") else "/tmp/mistral"
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# Load Mistral GGUF Model using ctransformers
+model = AutoModelForCausalLM.from_pretrained(
+    "TheBloke/Mistral-7B-Instruct-v0.2-GGUF",
+    model_file="mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    model_type="mistral",
+    gpu_layers=30  # Adjust based on available VRAM
+)
 
 # FAISS index storage path
-FAISS_INDEX_PATH = "faiss_index.bin"
-TEXT_STORAGE_PATH = "stored_texts.json"
+FAISS_INDEX_PATH = os.path.join(MODEL_DIR, "faiss_index.bin")
+TEXT_STORAGE_PATH = os.path.join(MODEL_DIR, "stored_texts.json")
 
 # Initialize FAISS index & stored texts
 index = faiss.IndexFlatL2(384)  # Model output size is 384
@@ -80,7 +87,7 @@ async def ingest_content(input_data: URLInput):
 
 @app.post("/ask/")
 async def ask_question(input_data: QuestionInput):
-    """Retrieve an answer using Hugging Face Mistral-7B"""
+    """Retrieve an answer using Mistral-7B via ctransformers"""
     global index, stored_texts
 
     if len(stored_texts) == 0:
@@ -95,12 +102,10 @@ async def ask_question(input_data: QuestionInput):
 
     best_match = stored_texts[nearest_idx[0][0]]
 
-    # Generate a response using the Mistral model
+    # Generate a response using Mistral-7B via ctransformers
     prompt = f"Based on the following webpage content, answer the question:\n\nContent:\n{best_match[:1000]}\n\nQuestion: {input_data.question}"
     
-    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
-    output = model.generate(**inputs, max_length=512)
-    response = tokenizer.decode(output[0], skip_special_tokens=True)
+    response = model(prompt)
 
     return {"answer": response}
 
